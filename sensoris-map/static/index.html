@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SENSORIS Live Map</title>
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+
+  <style>
+    /* ── reset & base ─────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:          #0d1117;
+      --sidebar-bg:  #161b22;
+      --card-bg:     #21262d;
+      --border:      #30363d;
+      --text:        #c9d1d9;
+      --text-dim:    #8b949e;
+      --accent:      #58a6ff;
+      --success:     #3fb950;
+      --warning:     #e3b341;
+      --danger:      #f85149;
+      --radius:      6px;
+      --font:        -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 13px; }
+
+    /* ── layout ───────────────────────────────────────────────────────────── */
+    #app      { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+    #header   { display: flex; align-items: center; gap: 12px; padding: 0 16px; height: 44px; background: var(--sidebar-bg); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    #body     { display: flex; flex: 1; overflow: hidden; }
+    #sidebar  { width: 300px; min-width: 300px; background: var(--sidebar-bg); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+    #map      { flex: 1; }
+
+    /* ── header ───────────────────────────────────────────────────────────── */
+    #header h1 { font-size: 15px; font-weight: 600; letter-spacing: .3px; }
+    #header h1 span { color: var(--accent); }
+    #status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); flex-shrink: 0; transition: background .4s; }
+    #status-dot.live        { background: var(--success); box-shadow: 0 0 6px var(--success); }
+    #status-dot.disconnected{ background: var(--danger); }
+    #status-label { font-size: 11px; color: var(--text-dim); }
+    #event-count  { margin-left: auto; font-size: 12px; color: var(--text-dim); }
+    #event-count b { color: var(--text); }
+
+    .hdr-btn {
+      background: var(--card-bg); border: 1px solid var(--border); color: var(--text-dim);
+      border-radius: var(--radius); padding: 3px 10px; font-size: 11px; cursor: pointer;
+      transition: border-color .2s, color .2s;
+    }
+    .hdr-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* ── sidebar tabs ─────────────────────────────────────────────────────── */
+    #tabs { display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    .tab  { flex: 1; padding: 8px 4px; text-align: center; font-size: 11px; font-weight: 500; color: var(--text-dim); cursor: pointer; border-bottom: 2px solid transparent; transition: color .2s, border-color .2s; }
+    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .tab:hover  { color: var(--text); }
+
+    .tab-panel          { display: none; flex: 1; overflow-y: auto; padding: 10px; }
+    .tab-panel.active   { display: flex; flex-direction: column; gap: 8px; }
+
+    /* ── stats panel ──────────────────────────────────────────────────────── */
+    #stats-total { font-size: 24px; font-weight: 700; color: var(--accent); }
+    #stats-sub   { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+    .stat-row    { display: flex; align-items: center; gap: 6px; }
+    .stat-swatch { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .stat-label  { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+    .stat-count  { font-size: 12px; font-weight: 600; color: var(--text-dim); margin-left: auto; }
+    .stat-bar-bg { height: 3px; background: var(--border); border-radius: 2px; flex: 1; }
+    .stat-bar    { height: 100%; border-radius: 2px; transition: width .4s; }
+    .stat-row-wrap { display: flex; flex-direction: column; gap: 2px; }
+
+    /* ── filter panel ─────────────────────────────────────────────────────── */
+    .filter-section { font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+    .filter-row     { display: flex; align-items: center; gap: 6px; padding: 3px 0; cursor: pointer; }
+    .filter-row input[type=checkbox] { accent-color: var(--accent); cursor: pointer; }
+    .filter-label   { flex: 1; color: var(--text); }
+    .filter-badge   { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .filter-btn-row { display: flex; gap: 6px; margin-top: 4px; }
+    .filter-btn { flex: 1; padding: 4px; background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-dim); font-size: 11px; cursor: pointer; }
+    .filter-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    .section-divider { border: none; border-top: 1px solid var(--border); margin: 6px 0; }
+
+    /* ── geo filter ────────────────────────────────────────────────────────── */
+    .geo-active-badge { font-size: 10px; color: var(--accent); font-weight: 700; text-transform: none; letter-spacing: 0; }
+    .geo-box  { background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 9px 10px; display: flex; flex-direction: column; gap: 5px; }
+    .geo-box.active { border-color: var(--accent)88; }
+    .geo-field { display: flex; align-items: center; gap: 6px; }
+    .geo-field label { font-size: 11px; color: var(--text-dim); width: 74px; flex-shrink: 0; }
+    .geo-field input { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 12px; padding: 4px 7px; outline: none; width: 0; }
+    .geo-field input:focus { border-color: var(--accent); }
+    .geo-field input.error { border-color: var(--danger); }
+    .geo-status { font-size: 11px; min-height: 15px; color: var(--text-dim); }
+    .geo-status.ok    { color: var(--success); }
+    .geo-status.err   { color: var(--danger); }
+    .geo-status.info  { color: var(--warning); }
+    .geo-btn-primary  { border-color: var(--accent)99 !important; color: var(--accent) !important; }
+
+    /* ── event list panel ─────────────────────────────────────────────────── */
+    .ev-item {
+      background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 7px 9px; cursor: pointer; transition: border-color .15s;
+    }
+    .ev-item:hover { border-color: var(--accent); }
+    .ev-item.new   { animation: flash .6s ease-out; }
+    .ev-top  { display: flex; align-items: center; gap: 6px; }
+    .ev-dot  { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+    .ev-label{ font-weight: 600; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ev-cat  { font-size: 10px; color: var(--text-dim); }
+    .ev-time { font-size: 10px; color: var(--text-dim); margin-top: 2px; padding-left: 15px; }
+    .ev-loc  { font-size: 10px; color: var(--text-dim); padding-left: 15px; }
+    @keyframes flash { 0%{box-shadow:0 0 0 2px var(--accent)80} 100%{box-shadow:none} }
+
+    /* ── popup ────────────────────────────────────────────────────────────── */
+    .leaflet-popup-content-wrapper { background: #1c2128; border: 1px solid var(--border); color: var(--text); border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,.6); }
+    .leaflet-popup-tip            { background: #1c2128; }
+    .leaflet-popup-content       { margin: 12px 14px; min-width: 240px; }
+    .popup-header { border-left: 3px solid #999; padding: 6px 10px; border-radius: 0 4px 4px 0; margin-bottom: 8px; }
+    .popup-label  { font-size: 14px; font-weight: 700; }
+    .popup-table  { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .popup-table td { padding: 3px 4px; vertical-align: top; }
+    .popup-table td:first-child { color: var(--text-dim); width: 76px; }
+    .popup-table td:last-child  { color: var(--text); font-weight: 500; word-break: break-word; }
+    .popup-raw-toggle { margin-top: 8px; font-size: 11px; color: var(--accent); cursor: pointer; }
+    .popup-raw { display: none; margin-top: 6px; font-size: 10px; color: var(--text-dim); font-family: monospace; white-space: pre-wrap; max-height: 160px; overflow-y: auto; background: var(--bg); border-radius: 4px; padding: 6px; border: 1px solid var(--border); }
+    .popup-raw.open { display: block; }
+
+    /* ── cluster overrides ────────────────────────────────────────────────── */
+    .marker-cluster-small  { background: #1d2d3e; }
+    .marker-cluster-medium { background: #2d3d4e; }
+    .marker-cluster-large  { background: #3d4d5e; }
+    .marker-cluster-small div, .marker-cluster-medium div, .marker-cluster-large div { background: #4a90d9; color: #fff; font-size: 11px; font-weight: 700; }
+
+    /* ── scrollbar ────────────────────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ── header ── -->
+  <header id="header">
+    <div id="status-dot"></div>
+    <span id="status-label">Connecting…</span>
+    <h1>SENSORIS <span>Live Map</span></h1>
+    <button class="hdr-btn" id="btn-fit">Fit all</button>
+    <button class="hdr-btn" id="btn-clear">Clear</button>
+    <span id="event-count"><b id="count-num">0</b> events</span>
+  </header>
+
+  <div id="body">
+
+    <!-- ── sidebar ── -->
+    <aside id="sidebar">
+      <div id="tabs">
+        <div class="tab active" data-tab="stats">Stats</div>
+        <div class="tab"        data-tab="filters">Filters</div>
+        <div class="tab"        data-tab="events">Events</div>
+      </div>
+
+      <!-- Stats tab -->
+      <div id="tab-stats" class="tab-panel active">
+        <div>
+          <div id="stats-total">0</div>
+          <div id="stats-sub">events loaded</div>
+        </div>
+        <hr class="section-divider" />
+        <div id="stats-list" style="display:flex;flex-direction:column;gap:6px;"></div>
+      </div>
+
+      <!-- Filters tab -->
+      <div id="tab-filters" class="tab-panel">
+
+        <!-- Geo filter -->
+        <div class="filter-section">
+          Geo Filter
+          <span id="geo-badge" class="geo-active-badge" style="display:none">● ACTIVE</span>
+        </div>
+        <div class="geo-box" id="geo-box">
+          <div class="geo-field">
+            <label>Latitude</label>
+            <input id="geo-lat" type="number" step="any" placeholder="48.137">
+          </div>
+          <div class="geo-field">
+            <label>Longitude</label>
+            <input id="geo-lon" type="number" step="any" placeholder="11.575">
+          </div>
+          <div class="geo-field">
+            <label>Radius (km)</label>
+            <input id="geo-radius" type="number" step="any" min="0.1" placeholder="50">
+          </div>
+          <div id="geo-status" class="geo-status"></div>
+          <div class="filter-btn-row">
+            <button class="filter-btn geo-btn-primary" id="btn-geo-apply">Apply</button>
+            <button class="filter-btn" id="btn-geo-pick" title="Click on the map to set the centre point">Pick</button>
+            <button class="filter-btn" id="btn-geo-fit"  title="Zoom map to filter circle">Zoom</button>
+            <button class="filter-btn" id="btn-geo-clear">Clear</button>
+          </div>
+        </div>
+        <hr class="section-divider" />
+
+        <!-- Category filter -->
+        <div class="filter-section">Category</div>
+        <label class="filter-row"><input type="checkbox" id="cat-weather" checked> <span class="filter-label">Weather</span></label>
+        <label class="filter-row"><input type="checkbox" id="cat-traffic" checked> <span class="filter-label">Traffic Events</span></label>
+        <hr class="section-divider" />
+
+        <!-- Event type filter -->
+        <div class="filter-section">Event Type</div>
+        <div id="type-filters" style="display:flex;flex-direction:column;gap:2px;"></div>
+        <div class="filter-btn-row">
+          <button class="filter-btn" id="btn-all">All</button>
+          <button class="filter-btn" id="btn-none">None</button>
+        </div>
+      </div>
+
+      <!-- Events tab -->
+      <div id="tab-events" class="tab-panel">
+        <div id="events-list" style="display:flex;flex-direction:column;gap:5px;"></div>
+      </div>
+    </aside>
+
+    <!-- ── map ── -->
+    <div id="map"></div>
+
+  </div>
+</div>
+
+<!-- Scripts -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+
+<script>
+// ── event colours ────────────────────────────────────────────────────────────
+const COLORS = {
+  // weather
+  LOW_HEAVY_RAIN:       '#1976d2',
+  LOW_FOG:              '#607d8b',
+  LOW_HEAVY_SNOW:       '#42a5f5',
+  LOW_SMOKE:            '#546e7a',
+  LOW_SUN_GLARE:        '#f9a825',
+  MIST:                 '#90a4ae',
+  CLEAR:                '#43a047',
+  RAIN:                 '#1e88e5',
+  SNOW:                 '#81d4fa',
+  MIXED_RAIN_SNOW:      '#4dd0e1',
+  HAIL:                 '#80deea',
+  ATMOSPHERE_CONDITION: '#78909c',
+  VARIABLE:             '#a5d6a7',
+  STRONG:               '#ff8f00',
+  STRONG_CROSS:         '#ef6c00',
+  STORM:                '#bf360c',
+  // traffic
+  ACCIDENT:             '#d32f2f',
+  ROADWORKS:            '#e65100',
+  SLIPPERY_ROAD:        '#00897b',
+  BROKEN_DOWN_VEHICLE:  '#6a1b9a',
+  SLOW_VEHICLE:         '#558b2f',
+  WRONG_WAY_VEHICLE:    '#ad1457',
+  OBSTRUCTION:          '#4e342e',
+  DANGEROUS_SLOW_DOWN:  '#f57f17',
+  STATIONARY_VEHICLE:   '#4527a0',
+  ECALL:                '#c62828',
+  PEOPLE:               '#6d4c41',
+  CHILDREN:             '#8d6e63',
+  CYCLIST:              '#5d4037',
+  TREE:                 '#33691e',
+  ANIMAL:               '#827717',
+  MUD:                  '#5d4037',
+  ICE:                  '#26c6da',
+  FREEZING_RAIN:        '#00b8d4',
+  HYDROPLANING:         '#0097a7',
+  FLOODING:             '#01579b',
+  WATER:                '#039be5',
+  ROADWORKS_START:      '#ff7043',
+  ROADWORKS_END:        '#ffab40',
+  // fallback
+  UNKNOWN:              '#455a64',
+  unknown:              '#455a64',
+};
+
+function getColor(label) {
+  return COLORS[label] || COLORS.UNKNOWN;
+}
+
+// ── geo filter helpers ────────────────────────────────────────────────────────
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371, p = Math.PI / 180;
+  const a = 0.5
+    - Math.cos((lat2 - lat1) * p) / 2
+    + Math.cos(lat1 * p) * Math.cos(lat2 * p)
+    * (1 - Math.cos((lon2 - lon1) * p)) / 2;
+  return R * 2 * Math.asin(Math.sqrt(a));
+}
+
+const geoFilter = { active: false, lat: 0, lon: 0, radiusKm: 0 };
+let   geoCircle  = null;
+let   pickMode   = false;
+
+function isGeoVisible(ev) {
+  if (!geoFilter.active) return true;
+  return haversineKm(geoFilter.lat, geoFilter.lon, ev.latitude, ev.longitude) <= geoFilter.radiusKm;
+}
+
+// ── state ────────────────────────────────────────────────────────────────────
+const allEvents    = [];             // master list
+const markerCache  = new Map();      // id → { marker, label }
+const clusterLayers= {};             // label → L.MarkerClusterGroup
+const hiddenLabels = new Set();      // labels currently filtered out
+const hiddenCats   = new Set();      // categories currently filtered out
+let   fitDone      = false;
+
+// ── map ──────────────────────────────────────────────────────────────────────
+const map = L.map('map', {
+  center: [50.5, 10.5],
+  zoom: 6,
+  zoomControl: true,
+  preferCanvas: true,
+});
+
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; <a href="https://www.openstreetmap.org">OpenStreetMap</a> &copy; <a href="https://carto.com">CARTO</a>',
+  maxZoom: 19,
+}).addTo(map);
+
+// ── marker helpers ────────────────────────────────────────────────────────────
+function makeIcon(label, size = 10) {
+  const c = getColor(label);
+  return L.divIcon({
+    className: '',
+    html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${c};border:1.5px solid rgba(255,255,255,.65);box-shadow:0 0 5px ${c}90"></div>`,
+    iconSize:   [size, size],
+    iconAnchor: [size / 2, size / 2],
+  });
+}
+
+function popupHtml(ev) {
+  const c = getColor(ev.event_label);
+  const loc = `${ev.latitude.toFixed(5)}, ${ev.longitude.toFixed(5)}`;
+  const rawId = `raw-${ev.id}`;
+  return `
+    <div class="popup-header" style="border-left-color:${c}">
+      <span class="popup-label" style="color:${c}">${ev.event_label}</span>
+    </div>
+    <table class="popup-table">
+      <tr><td>Category</td><td>${ev.category}</td></tr>
+      <tr><td>Subtype</td><td>${ev.event_subtype}</td></tr>
+      <tr><td>Type</td><td>${ev.event_type}</td></tr>
+      <tr><td>Time</td><td>${ev.time_human || ev.timestamp || 'unknown'}</td></tr>
+      <tr><td>Location</td><td>${loc}</td></tr>
+    </table>
+    <div class="popup-raw-toggle" onclick="toggleRaw('${rawId}')">▶ Raw message</div>
+    <pre class="popup-raw" id="${rawId}">${escHtml(ev.raw_message || '')}</pre>`;
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+window.toggleRaw = function(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.toggle('open');
+  const tog = el.previousElementSibling;
+  tog.textContent = el.classList.contains('open') ? '▼ Raw message' : '▶ Raw message';
+};
+
+// ── add events to map ─────────────────────────────────────────────────────────
+function ensureCluster(label) {
+  if (clusterLayers[label]) return;
+  const grp = L.markerClusterGroup({
+    maxClusterRadius: 50,
+    showCoverageOnHover: false,
+    spiderfyOnMaxZoom: true,
+    chunkedLoading: true,
+  });
+  clusterLayers[label] = grp;
+  // only add to map if not hidden
+  const ev0 = allEvents.find(e => e.event_label === label);
+  const catHidden = ev0 && hiddenCats.has(ev0.category);
+  if (!hiddenLabels.has(label) && !catHidden) {
+    map.addLayer(grp);
+  }
+}
+
+function addEventsToMap(newEvs, animate) {
+  newEvs.forEach(ev => {
+    if (!isGeoVisible(ev)) return;   // skip if outside active geo filter
+    ensureCluster(ev.event_label);
+    const m = L.marker([ev.latitude, ev.longitude], {
+      icon: makeIcon(ev.event_label, animate ? 13 : 10),
+    });
+    m.bindPopup(() => popupHtml(ev), { maxWidth: 320, className: '' });
+    clusterLayers[ev.event_label].addLayer(m);
+    markerCache.set(ev.id, { marker: m, label: ev.event_label });
+    if (animate) setTimeout(() => m.setIcon(makeIcon(ev.event_label, 10)), 1800);
+  });
+}
+
+// Rebuild all cluster-group contents from scratch, honouring geo + label + cat filters.
+// Called whenever the geo filter is applied or cleared.
+function rebuildMapForGeoFilter() {
+  Object.values(clusterLayers).forEach(grp => grp.clearLayers());
+  markerCache.clear();
+
+  allEvents.forEach(ev => {
+    if (!isGeoVisible(ev))              return;
+    if (hiddenLabels.has(ev.event_label)) return;
+    if (hiddenCats.has(ev.category))      return;
+    const grp = clusterLayers[ev.event_label];
+    if (!grp) return;
+    const m = L.marker([ev.latitude, ev.longitude], { icon: makeIcon(ev.event_label, 10) });
+    m.bindPopup(() => popupHtml(ev), { maxWidth: 320 });
+    grp.addLayer(m);
+    markerCache.set(ev.id, { marker: m, label: ev.event_label });
+  });
+
+  updateGeoStatus();
+}
+
+// ── stats ─────────────────────────────────────────────────────────────────────
+const labelTotals = {};
+
+function rebuildStats() {
+  const total = allEvents.length;
+  document.getElementById('stats-total').textContent = total.toLocaleString();
+  document.getElementById('stats-sub').textContent =
+    `event${total !== 1 ? 's' : ''} loaded`;
+
+  const maxCount = Math.max(...Object.values(labelTotals), 1);
+  const list = document.getElementById('stats-list');
+  list.innerHTML = '';
+  Object.entries(labelTotals)
+    .sort((a, b) => b[1] - a[1])
+    .forEach(([label, count]) => {
+      const c = getColor(label);
+      const pct = Math.round((count / maxCount) * 100);
+      list.insertAdjacentHTML('beforeend', `
+        <div class="stat-row-wrap">
+          <div class="stat-row">
+            <div class="stat-swatch" style="background:${c}"></div>
+            <span class="stat-label" title="${label}">${label}</span>
+            <span class="stat-count">${count}</span>
+          </div>
+          <div class="stat-bar-bg"><div class="stat-bar" style="width:${pct}%;background:${c}"></div></div>
+        </div>`);
+    });
+}
+
+// ── type filter checkboxes ────────────────────────────────────────────────────
+const knownLabels = new Set();
+
+function ensureFilterRow(label) {
+  if (knownLabels.has(label)) return;
+  knownLabels.add(label);
+  const c = getColor(label);
+  const id = `chk-${CSS.escape(label)}`;
+  const row = document.createElement('label');
+  row.className = 'filter-row';
+  row.innerHTML = `
+    <input type="checkbox" id="${id}" checked data-label="${label}">
+    <div class="filter-badge" style="background:${c}"></div>
+    <span class="filter-label">${label}</span>`;
+  document.getElementById('type-filters').appendChild(row);
+  row.querySelector('input').addEventListener('change', e => {
+    setLabelVisible(label, e.target.checked);
+  });
+}
+
+function setLabelVisible(label, visible) {
+  if (!clusterLayers[label]) return;
+  if (visible) {
+    hiddenLabels.delete(label);
+    if (!map.hasLayer(clusterLayers[label])) map.addLayer(clusterLayers[label]);
+  } else {
+    hiddenLabels.add(label);
+    if (map.hasLayer(clusterLayers[label])) map.removeLayer(clusterLayers[label]);
+  }
+}
+
+function setCategoryVisible(cat, visible) {
+  if (visible) {
+    hiddenCats.delete(cat);
+  } else {
+    hiddenCats.add(cat);
+  }
+  // show/hide all labels belonging to this category
+  [...new Set(allEvents.filter(e => e.category === cat).map(e => e.event_label))]
+    .forEach(label => {
+      const chk = document.querySelector(`input[data-label="${label}"]`);
+      if (!chk || !chk.checked) return;  // respect per-label checkbox
+      setLabelVisible(label, visible);
+    });
+}
+
+// ── event list ────────────────────────────────────────────────────────────────
+const MAX_LIST = 60;
+
+function prependEventItem(ev, animate) {
+  const list = document.getElementById('events-list');
+  if (list.children.length >= MAX_LIST) list.lastChild?.remove();
+
+  const c   = getColor(ev.event_label);
+  const div = document.createElement('div');
+  div.className = 'ev-item' + (animate ? ' new' : '');
+  div.dataset.id = ev.id;
+  div.innerHTML = `
+    <div class="ev-top">
+      <div class="ev-dot" style="background:${c}"></div>
+      <span class="ev-label" title="${ev.event_label}" style="color:${c}">${ev.event_label}</span>
+      <span class="ev-cat">${ev.category}</span>
+    </div>
+    <div class="ev-time">${ev.time_human || ev.timestamp || 'unknown time'}</div>
+    <div class="ev-loc">${ev.latitude.toFixed(4)}, ${ev.longitude.toFixed(4)}</div>`;
+  div.addEventListener('click', () => flyToEvent(ev));
+  list.prepend(div);
+}
+
+function flyToEvent(ev) {
+  map.flyTo([ev.latitude, ev.longitude], 13, { duration: 0.8 });
+  const cached = markerCache.get(ev.id);
+  if (cached) {
+    setTimeout(() => cached.marker.openPopup(), 900);
+  }
+  // switch to Events tab
+  switchTab('events');
+}
+
+// ── header counter ────────────────────────────────────────────────────────────
+function updateCount() {
+  document.getElementById('count-num').textContent = allEvents.length.toLocaleString();
+}
+
+// ── auto-fit ──────────────────────────────────────────────────────────────────
+function fitAll() {
+  if (!allEvents.length) return;
+  const bounds = L.latLngBounds(allEvents.map(e => [e.latitude, e.longitude]));
+  map.fitBounds(bounds, { padding: [40, 40] });
+}
+
+// ── ingest batch ──────────────────────────────────────────────────────────────
+function ingestBatch(batch, animate) {
+  batch.forEach(ev => {
+    allEvents.push(ev);
+    if (!labelTotals[ev.event_label]) labelTotals[ev.event_label] = 0;
+    labelTotals[ev.event_label]++;
+    ensureFilterRow(ev.event_label);
+    prependEventItem(ev, animate);
+  });
+  addEventsToMap(batch, animate);
+  rebuildStats();
+  updateCount();
+  if (geoFilter.active) updateGeoStatus();
+
+  if (!fitDone && allEvents.length > 0) {
+    fitAll();
+    fitDone = true;
+  }
+}
+
+// ── SSE connection ────────────────────────────────────────────────────────────
+let reconnectDelay = 2000;
+
+function setStatus(text, cls) {
+  const dot   = document.getElementById('status-dot');
+  const label = document.getElementById('status-label');
+  dot.className   = cls;
+  label.textContent = text;
+}
+
+function connectSSE() {
+  setStatus('Connecting…', '');
+  const es = new EventSource('/api/stream');
+
+  es.onopen = () => {
+    setStatus('LIVE', 'live');
+    reconnectDelay = 2000;
+  };
+
+  es.onmessage = e => {
+    let data;
+    try { data = JSON.parse(e.data); } catch { return; }
+    if (!data || !data.length) return;   // heartbeat
+
+    const isFirst = allEvents.length === 0;
+    ingestBatch(data, !isFirst);         // don't animate the initial bulk load
+  };
+
+  es.onerror = () => {
+    setStatus('Reconnecting…', 'disconnected');
+    es.close();
+    setTimeout(connectSSE, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 1.5, 30000);
+  };
+}
+
+// ── tabs ──────────────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `tab-${name}`));
+}
+
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => switchTab(t.dataset.tab));
+});
+
+// ── controls ──────────────────────────────────────────────────────────────────
+document.getElementById('btn-fit').addEventListener('click', fitAll);
+
+document.getElementById('btn-clear').addEventListener('click', () => {
+  if (!confirm('Clear all events from the map?')) return;
+  allEvents.length = 0;
+  markerCache.clear();
+  Object.keys(labelTotals).forEach(k => delete labelTotals[k]);
+  Object.entries(clusterLayers).forEach(([, grp]) => { grp.clearLayers(); map.removeLayer(grp); });
+  Object.keys(clusterLayers).forEach(k => delete clusterLayers[k]);
+  document.getElementById('events-list').innerHTML = '';
+  document.getElementById('stats-list').innerHTML = '';
+  document.getElementById('type-filters').innerHTML = '';
+  knownLabels.clear();
+  hiddenLabels.clear();
+  hiddenCats.clear();
+  fitDone = false;
+  rebuildStats();
+  updateCount();
+});
+
+document.getElementById('btn-all').addEventListener('click', () => {
+  document.querySelectorAll('#type-filters input').forEach(chk => {
+    chk.checked = true;
+    setLabelVisible(chk.dataset.label, true);
+  });
+});
+
+document.getElementById('btn-none').addEventListener('click', () => {
+  document.querySelectorAll('#type-filters input').forEach(chk => {
+    chk.checked = false;
+    setLabelVisible(chk.dataset.label, false);
+  });
+});
+
+document.getElementById('cat-weather').addEventListener('change', e => {
+  setCategoryVisible('weather', e.target.checked);
+});
+
+document.getElementById('cat-traffic').addEventListener('change', e => {
+  setCategoryVisible('traffic_event', e.target.checked);
+});
+
+// ── geo filter controls ───────────────────────────────────────────────────────
+function updateGeoStatus() {
+  const el = document.getElementById('geo-status');
+  if (!geoFilter.active) { el.textContent = ''; el.className = 'geo-status'; return; }
+  const n = allEvents.filter(isGeoVisible).length;
+  el.textContent = `${n.toLocaleString()} of ${allEvents.length.toLocaleString()} events in radius`;
+  el.className = 'geo-status ok';
+}
+
+function setGeoMsg(msg, type = '') {
+  const el = document.getElementById('geo-status');
+  el.textContent = msg;
+  el.className = 'geo-status' + (type ? ' ' + type : '');
+}
+
+function applyGeoFilter() {
+  const lat = parseFloat(document.getElementById('geo-lat').value);
+  const lon = parseFloat(document.getElementById('geo-lon').value);
+  const r   = parseFloat(document.getElementById('geo-radius').value);
+
+  if (isNaN(lat) || lat < -90  || lat > 90)  { setGeoMsg('Latitude must be −90 … 90',   'err'); return; }
+  if (isNaN(lon) || lon < -180 || lon > 180) { setGeoMsg('Longitude must be −180 … 180','err'); return; }
+  if (isNaN(r)   || r <= 0)                  { setGeoMsg('Radius must be > 0 km',        'err'); return; }
+
+  geoFilter.active   = true;
+  geoFilter.lat      = lat;
+  geoFilter.lon      = lon;
+  geoFilter.radiusKm = r;
+
+  // draw / update circle
+  if (geoCircle) map.removeLayer(geoCircle);
+  geoCircle = L.circle([lat, lon], {
+    radius:      r * 1000,
+    color:       '#58a6ff',
+    weight:      2,
+    dashArray:   '6 4',
+    fillColor:   '#58a6ff',
+    fillOpacity: 0.07,
+  }).addTo(map);
+
+  document.getElementById('geo-badge').style.display = '';
+  document.getElementById('geo-box').classList.add('active');
+  rebuildMapForGeoFilter();
+}
+
+function clearGeoFilter() {
+  geoFilter.active = false;
+  if (geoCircle) { map.removeLayer(geoCircle); geoCircle = null; }
+  ['geo-lat', 'geo-lon', 'geo-radius'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('geo-badge').style.display = 'none';
+  document.getElementById('geo-box').classList.remove('active');
+  setGeoMsg('');
+  rebuildMapForGeoFilter();
+}
+
+function enterPickMode() {
+  if (pickMode) return;
+  pickMode = true;
+  map.getContainer().style.cursor = 'crosshair';
+  setGeoMsg('Click on the map to set the centre…', 'info');
+}
+
+// map click → set lat/lon when in pick mode
+map.on('click', e => {
+  if (!pickMode) return;
+  pickMode = false;
+  map.getContainer().style.cursor = '';
+  document.getElementById('geo-lat').value = e.latlng.lat.toFixed(5);
+  document.getElementById('geo-lon').value = e.latlng.lng.toFixed(5);
+  setGeoMsg('Centre set — enter radius and click Apply.', 'info');
+});
+
+document.getElementById('btn-geo-apply').addEventListener('click', applyGeoFilter);
+document.getElementById('btn-geo-pick' ).addEventListener('click', enterPickMode);
+document.getElementById('btn-geo-clear').addEventListener('click', clearGeoFilter);
+document.getElementById('btn-geo-fit'  ).addEventListener('click', () => {
+  if (geoCircle) map.fitBounds(geoCircle.getBounds(), { padding: [30, 30] });
+});
+
+// ── startup: load server config then connect ──────────────────────────────────
+async function boot() {
+  try {
+    const cfg = await fetch('/api/config').then(r => r.json());
+    if (cfg.geo) {
+      document.getElementById('geo-lat').value    = cfg.geo.lat;
+      document.getElementById('geo-lon').value    = cfg.geo.lon;
+      document.getElementById('geo-radius').value = cfg.geo.radius_km;
+      applyGeoFilter();   // pre-apply before any events arrive
+      switchTab('filters');
+    }
+  } catch { /* server config unavailable — continue without it */ }
+  connectSSE();
+}
+
+boot();
+</script>
+</body>
+</html>
